@@ -59,6 +59,12 @@ func SetSkipCheck(skipCheck bool) Option {
 	}
 }
 
+func SetFOpenFSCheck(openCheck bool) Option {
+	return func(o *options) {
+		o.openCheck = openCheck
+	}
+}
+
 // SkipCheck sets archive files checksum not to be checked.
 func SkipCheck(o *options) { o.skipCheck = true }
 
