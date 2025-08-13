@@ -53,6 +53,12 @@ func Password(pass string) Option {
 	return func(o *options) { o.pass = &pass }
 }
 
+func SetSkipCheck(skipCheck bool) Option {
+	return func(o *options) {
+		o.skipCheck = skipCheck
+	}
+}
+
 // SkipCheck sets archive files checksum not to be checked.
 func SkipCheck(o *options) { o.skipCheck = true }
 
