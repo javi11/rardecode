@@ -199,6 +199,7 @@ func (br *bufVolumeReader) Reset(r io.Reader) error {
 	br.i = 0
 	br.n = 0
 	br.off = 0
+	br.err = nil // Clear any previous error state when switching volumes
 	ver, err := br.findSig()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
