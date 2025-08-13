@@ -636,6 +636,21 @@ type ReadCloser struct {
 // Close closes the rar file.
 func (rc *ReadCloser) Close() error { return rc.cl.Close() }
 
+// Seek sets the offset for the next Read on the current file to offset, interpreted
+// according to whence: io.SeekStart means relative to the start of the file,
+// io.SeekCurrent means relative to the current offset, and io.SeekEnd means
+// relative to the end. Seek returns the new offset relative to the start of the
+// file or an error, if any.
+//
+// Seeking is only supported when the underlying volume supports seeking (file-based volumes).
+// For non-seekable volumes (e.g., streams), this method returns fs.ErrInvalid.
+func (rc *ReadCloser) Seek(offset int64, whence int) (int64, error) {
+	if seeker, ok := rc.f.(io.Seeker); ok {
+		return seeker.Seek(offset, whence)
+	}
+	return 0, fs.ErrInvalid
+}
+
 // Volumes returns the volume filenames that have been used in decoding the archive
 // up to this point. This will include the current open volume if the archive is still
 // being processed.
