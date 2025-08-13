@@ -28,12 +28,13 @@ const (
 )
 
 var (
-	ErrShortFile        = errors.New("rardecode: decoded file too short")
-	ErrInvalidFileBlock = errors.New("rardecode: invalid file block")
-	ErrUnexpectedArcEnd = errors.New("rardecode: unexpected end of archive")
-	ErrBadFileChecksum  = errors.New("rardecode: bad file checksum")
-	ErrSolidOpen        = errors.New("rardecode: solid files don't support Open")
-	ErrUnknownVersion   = errors.New("rardecode: unknown archive version")
+	ErrShortFile         = errors.New("rardecode: decoded file too short")
+	ErrInvalidFileBlock  = errors.New("rardecode: invalid file block")
+	ErrUnexpectedArcEnd  = errors.New("rardecode: unexpected end of archive")
+	ErrBadFileChecksum   = errors.New("rardecode: bad file checksum")
+	ErrSolidOpen         = errors.New("rardecode: solid files don't support Open")
+	ErrUnknownVersion    = errors.New("rardecode: unknown archive version")
+	ErrCompressedSeek    = errors.New("rardecode: seek not supported on compressed files")
 )
 
 // FileHeader represents a single file in a RAR archive.
@@ -642,11 +643,18 @@ func (rc *ReadCloser) Close() error { return rc.cl.Close() }
 // relative to the end. Seek returns the new offset relative to the start of the
 // file or an error, if any.
 //
-// Seeking is only supported when the underlying volume supports seeking (file-based volumes).
-// For non-seekable volumes (e.g., streams), this method returns fs.ErrInvalid.
+// Seeking is only supported when the underlying volume supports seeking (file-based volumes)
+// and the current file is uncompressed. For compressed files, this method returns 
+// ErrCompressedSeek. For non-seekable volumes (e.g., streams), this method returns fs.ErrInvalid.
 func (rc *ReadCloser) Seek(offset int64, whence int) (int64, error) {
 	if seeker, ok := rc.f.(io.Seeker); ok {
-		return seeker.Seek(offset, whence)
+		pos, err := seeker.Seek(offset, whence)
+		if err == fs.ErrInvalid {
+			// Check if this might be a compressed file seek attempt
+			// by checking if the underlying reader is not seekable due to compression
+			return 0, ErrCompressedSeek
+		}
+		return pos, err
 	}
 	return 0, fs.ErrInvalid
 }
