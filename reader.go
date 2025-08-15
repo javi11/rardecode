@@ -683,7 +683,7 @@ func List(name string, opts ...Option) ([]*File, error) {
 	for _, blocks := range fileBlocks {
 		h := blocks.firstBlock()
 		fh := h.FileHeader
-		fh.Offset = h.packedOff
+		fh.Offset = h.dataOff
 		f := &File{
 			FileHeader: fh,
 			blocks:     blocks,
