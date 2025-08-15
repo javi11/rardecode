@@ -607,7 +607,7 @@ func (r *Reader) Next() (*FileHeader, error) {
 	}
 	h := blocks.firstBlock()
 	fh := h.FileHeader
-	fh.Offset = h.packedOff
+	fh.Offset = h.dataOff
 	return &fh, nil
 }
 
