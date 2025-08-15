@@ -52,6 +52,7 @@ type FileHeader struct {
 	CreationTime     time.Time // creation time (non-zero if set)
 	AccessTime       time.Time // access time (non-zero if set)
 	Version          int       // file version
+	Offset           int64     // file offset in the archive
 }
 
 // Mode returns an fs.FileMode for the file, calculated from the Attributes field.
@@ -605,7 +606,9 @@ func (r *Reader) Next() (*FileHeader, error) {
 		return nil, err
 	}
 	h := blocks.firstBlock()
-	return &h.FileHeader, nil
+	fh := h.FileHeader
+	fh.Offset = h.packedOff
+	return &fh, nil
 }
 
 func newReader(v volume, opts *options) Reader {
@@ -679,8 +682,10 @@ func List(name string, opts ...Option) ([]*File, error) {
 	var fl []*File
 	for _, blocks := range fileBlocks {
 		h := blocks.firstBlock()
+		fh := h.FileHeader
+		fh.Offset = h.packedOff
 		f := &File{
-			FileHeader: h.FileHeader,
+			FileHeader: fh,
 			blocks:     blocks,
 			vm:         vm,
 		}
