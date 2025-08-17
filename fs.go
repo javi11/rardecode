@@ -265,7 +265,8 @@ func (rfs *RarFS) Sub(dir string) (fs.FS, error) {
 	return newFS, nil
 }
 
-func listFileBlocks(name string, opts []Option) (*volumeManager, []*fileBlockList, error) {
+// readAllFileBlocks reads all file blocks from all volumes and returns them along with volume manager
+func readAllFileBlocks(name string, opts []Option) (*volumeManager, []*fileBlockList, error) {
 	options := getOptions(opts)
 	if options.openCheck {
 		options.skipCheck = false
@@ -298,6 +299,40 @@ func listFileBlocks(name string, opts []Option) (*volumeManager, []*fileBlockLis
 			}
 		}
 	}
+}
+
+// convertToFileHeaders converts fileBlockList slices to FileHeader slices with volume metadata
+func convertToFileHeaders(fileBlocks []*fileBlockList) []*FileHeader {
+	var headers []*FileHeader
+	
+	for _, blocks := range fileBlocks {
+		h := blocks.firstBlock()
+		fh := h.FileHeader
+		fh.Offset = h.dataOff
+		
+		// Set volume metadata
+		fh.VolumeNumber = h.volnum
+		fh.PartNumber = h.blocknum
+		
+		// Calculate total parts by finding the highest block number for this file
+		maxBlockNum := h.blocknum
+		blocks.mu.RLock()
+		for _, block := range blocks.blocks {
+			if block.blocknum > maxBlockNum {
+				maxBlockNum = block.blocknum
+			}
+		}
+		blocks.mu.RUnlock()
+		fh.TotalParts = maxBlockNum + 1 // blocks are 0-indexed
+		
+		headers = append(headers, &fh)
+	}
+	
+	return headers
+}
+
+func listFileBlocks(name string, opts []Option) (*volumeManager, []*fileBlockList, error) {
+	return readAllFileBlocks(name, opts)
 }
 
 func OpenFS(name string, opts ...Option) (*RarFS, error) {

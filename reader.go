@@ -53,6 +53,9 @@ type FileHeader struct {
 	AccessTime       time.Time // access time (non-zero if set)
 	Version          int       // file version
 	Offset           int64     // file offset in the archive
+	VolumeNumber     int       // which volume this header came from
+	PartNumber       int       // for files spanning multiple volumes (0-based)
+	TotalParts       int       // total parts for this file across volumes
 }
 
 // Mode returns an fs.FileMode for the file, calculated from the Attributes field.
@@ -608,7 +611,22 @@ func (r *Reader) Next() (*FileHeader, error) {
 	h := blocks.firstBlock()
 	fh := h.FileHeader
 	fh.Offset = h.dataOff
+	// Set volume metadata for single volume archive
+	fh.VolumeNumber = h.volnum
+	fh.PartNumber = h.blocknum
+	fh.TotalParts = 1 // Single volume archives have only one part per file
 	return &fh, nil
+}
+
+// ReadHeaders returns all file headers from the archive.
+// For single volume archives only. Use ReadCloser.ReadHeaders() for multivolume archives.
+func (r *Reader) ReadHeaders() ([]*FileHeader, error) {
+	var headers []*FileHeader
+	
+	// Reset to beginning by creating a new reader instance
+	// Since Reader doesn't support seeking, we can't implement this efficiently
+	// Return an error suggesting to use ReadCloser for multivolume support
+	return headers, errors.New("rardecode: ReadHeaders not supported on Reader, use OpenReader for multivolume archives")
 }
 
 func newReader(v volume, opts *options) Reader {
@@ -646,6 +664,44 @@ func (rc *ReadCloser) Volumes() []string {
 	return rc.vm.Files()
 }
 
+// ReadHeaders returns all file headers from all volumes in the multivolume archive.
+// This reads all headers without extracting file contents, making it efficient for
+// getting archive metadata.
+func (rc *ReadCloser) ReadHeaders() ([]*FileHeader, error) {
+	// We need to get the volume manager's directory and first file to reconstruct the path
+	files := rc.vm.Files()
+	if len(files) == 0 {
+		return nil, errors.New("rardecode: no volumes available")
+	}
+	
+	// Get the full path to the first volume
+	firstVolumePath := rc.vm.dir + files[0]
+	
+	// Use the readAllFileBlocks function to get all blocks from all volumes
+	_, fileBlocks, err := readAllFileBlocks(firstVolumePath, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	return convertToFileHeaders(fileBlocks), nil
+}
+
+// VolumeHeaders returns file headers grouped by volume number.
+// This provides visibility into which files are in which volumes.
+func (rc *ReadCloser) VolumeHeaders() (map[int][]*FileHeader, error) {
+	headers, err := rc.ReadHeaders()
+	if err != nil {
+		return nil, err
+	}
+	
+	volumeMap := make(map[int][]*FileHeader)
+	for _, header := range headers {
+		volumeMap[header.VolumeNumber] = append(volumeMap[header.VolumeNumber], header)
+	}
+	
+	return volumeMap, nil
+}
+
 // OpenReader opens a RAR archive specified by the name and returns a ReadCloser.
 func OpenReader(name string, opts ...Option) (*ReadCloser, error) {
 	options := getOptions(opts)
@@ -673,6 +729,19 @@ func (f *File) Open() (io.ReadCloser, error) {
 	return f.vm.openArchiveFile(f.blocks)
 }
 
+// ReadHeaders reads all file headers from a multivolume RAR archive.
+// This is similar to List but returns only headers without File objects,
+// making it more efficient when only metadata is needed.
+// This function provides functionality similar to sharpcompress headerFactory.ReadHeaders.
+func ReadHeaders(name string, opts ...Option) ([]*FileHeader, error) {
+	_, fileBlocks, err := readAllFileBlocks(name, opts)
+	if err != nil {
+		return nil, err
+	}
+	
+	return convertToFileHeaders(fileBlocks), nil
+}
+
 // List returns a list of File's in the RAR archive specified by name.
 func List(name string, opts ...Option) ([]*File, error) {
 	vm, fileBlocks, err := listFileBlocks(name, opts)
@@ -684,6 +753,20 @@ func List(name string, opts ...Option) ([]*File, error) {
 		h := blocks.firstBlock()
 		fh := h.FileHeader
 		fh.Offset = h.dataOff
+		// Set volume metadata
+		fh.VolumeNumber = h.volnum
+		fh.PartNumber = h.blocknum
+		// Calculate total parts
+		maxBlockNum := h.blocknum
+		blocks.mu.RLock()
+		for _, block := range blocks.blocks {
+			if block.blocknum > maxBlockNum {
+				maxBlockNum = block.blocknum
+			}
+		}
+		blocks.mu.RUnlock()
+		fh.TotalParts = maxBlockNum + 1
+		
 		f := &File{
 			FileHeader: fh,
 			blocks:     blocks,
