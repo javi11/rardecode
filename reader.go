@@ -686,10 +686,48 @@ func (rc *ReadCloser) ReadHeaders() ([]*FileHeader, error) {
 	return convertToFileHeaders(fileBlocks), nil
 }
 
+// ReadAllHeaders returns ALL file block headers from all volumes in the multivolume archive.
+// Unlike ReadHeaders which returns one header per file, this returns one header per block/part,
+// giving you complete visibility into every volume/part combination.
+func (rc *ReadCloser) ReadAllHeaders() ([]*FileHeader, error) {
+	// We need to get the volume manager's directory and first file to reconstruct the path
+	files := rc.vm.Files()
+	if len(files) == 0 {
+		return nil, errors.New("rardecode: no volumes available")
+	}
+	
+	// Get the full path to the first volume
+	firstVolumePath := rc.vm.dir + files[0]
+	
+	// Use the readAllFileBlocks function to get all blocks from all volumes
+	_, fileBlocks, err := readAllFileBlocks(firstVolumePath, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	return convertToAllBlockHeaders(fileBlocks), nil
+}
+
 // VolumeHeaders returns file headers grouped by volume number.
 // This provides visibility into which files are in which volumes.
 func (rc *ReadCloser) VolumeHeaders() (map[int][]*FileHeader, error) {
 	headers, err := rc.ReadHeaders()
+	if err != nil {
+		return nil, err
+	}
+	
+	volumeMap := make(map[int][]*FileHeader)
+	for _, header := range headers {
+		volumeMap[header.VolumeNumber] = append(volumeMap[header.VolumeNumber], header)
+	}
+	
+	return volumeMap, nil
+}
+
+// VolumeAllHeaders returns ALL file block headers grouped by volume number.
+// Unlike VolumeHeaders which groups files, this groups individual blocks/parts.
+func (rc *ReadCloser) VolumeAllHeaders() (map[int][]*FileHeader, error) {
+	headers, err := rc.ReadAllHeaders()
 	if err != nil {
 		return nil, err
 	}
@@ -740,6 +778,18 @@ func ReadHeaders(name string, opts ...Option) ([]*FileHeader, error) {
 	}
 	
 	return convertToFileHeaders(fileBlocks), nil
+}
+
+// ReadAllHeaders reads ALL file block headers from a multivolume RAR archive.
+// Unlike ReadHeaders which returns one header per file, this returns one header 
+// per block/part, giving you visibility into every volume/part combination.
+func ReadAllHeaders(name string, opts ...Option) ([]*FileHeader, error) {
+	_, fileBlocks, err := readAllFileBlocks(name, opts)
+	if err != nil {
+		return nil, err
+	}
+	
+	return convertToAllBlockHeaders(fileBlocks), nil
 }
 
 // List returns a list of File's in the RAR archive specified by name.

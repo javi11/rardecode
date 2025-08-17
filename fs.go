@@ -302,6 +302,7 @@ func readAllFileBlocks(name string, opts []Option) (*volumeManager, []*fileBlock
 }
 
 // convertToFileHeaders converts fileBlockList slices to FileHeader slices with volume metadata
+// Returns one header per file (using first block)
 func convertToFileHeaders(fileBlocks []*fileBlockList) []*FileHeader {
 	var headers []*FileHeader
 	
@@ -326,6 +327,40 @@ func convertToFileHeaders(fileBlocks []*fileBlockList) []*FileHeader {
 		fh.TotalParts = maxBlockNum + 1 // blocks are 0-indexed
 		
 		headers = append(headers, &fh)
+	}
+	
+	return headers
+}
+
+// convertToAllBlockHeaders converts fileBlockList slices to FileHeader slices for ALL blocks
+// Returns one header per block/part across all volumes (what you actually want)
+func convertToAllBlockHeaders(fileBlocks []*fileBlockList) []*FileHeader {
+	var headers []*FileHeader
+	
+	for _, blocks := range fileBlocks {
+		// Calculate total parts for this file first
+		maxBlockNum := 0
+		blocks.mu.RLock()
+		for _, block := range blocks.blocks {
+			if block.blocknum > maxBlockNum {
+				maxBlockNum = block.blocknum
+			}
+		}
+		totalParts := maxBlockNum + 1
+		
+		// Create a header for each block/part
+		for _, block := range blocks.blocks {
+			fh := block.FileHeader
+			fh.Offset = block.dataOff
+			
+			// Set volume metadata for this specific block
+			fh.VolumeNumber = block.volnum
+			fh.PartNumber = block.blocknum
+			fh.TotalParts = totalParts
+			
+			headers = append(headers, &fh)
+		}
+		blocks.mu.RUnlock()
 	}
 	
 	return headers

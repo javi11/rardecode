@@ -17,9 +17,10 @@ type FileHeader struct {
 }
 ```
 
-### Standalone ReadHeaders Function
+### Standalone Functions
 
-Read all file headers from all volumes without extracting content:
+#### ReadHeaders - One Header Per File
+Read all file headers from all volumes (one header per file):
 
 ```go
 headers, err := rardecode.ReadHeaders("archive.part1.rar")
@@ -34,6 +35,22 @@ for _, header := range headers {
 }
 ```
 
+#### ReadAllHeaders - All Block Headers
+Read ALL block headers from ALL volumes (one header per block/part):
+
+```go
+allHeaders, err := rardecode.ReadAllHeaders("archive.part1.rar")
+if err != nil {
+    log.Fatal(err)
+}
+
+for _, header := range allHeaders {
+    fmt.Printf("Block: %s (Volume %d, Part %d/%d, Offset %d)\n", 
+        header.Name, header.VolumeNumber, 
+        header.PartNumber+1, header.TotalParts, header.Offset)
+}
+```
+
 ### ReadCloser Methods
 
 For more advanced scenarios with open archives:
@@ -45,20 +62,32 @@ if err != nil {
 }
 defer rc.Close()
 
-// Get all headers
+// Get file headers (one per file)
 headers, err := rc.ReadHeaders()
 if err != nil {
     log.Fatal(err)
 }
 
-// Get headers grouped by volume
+// Get ALL block headers (one per block/part)
+allHeaders, err := rc.ReadAllHeaders()
+if err != nil {
+    log.Fatal(err)
+}
+
+// Get file headers grouped by volume
 volumeHeaders, err := rc.VolumeHeaders()
 if err != nil {
     log.Fatal(err)
 }
 
-for volumeNum, headers := range volumeHeaders {
-    fmt.Printf("Volume %d contains %d files\n", volumeNum, len(headers))
+// Get ALL block headers grouped by volume
+volumeAllHeaders, err := rc.VolumeAllHeaders()
+if err != nil {
+    log.Fatal(err)
+}
+
+for volumeNum, headers := range volumeAllHeaders {
+    fmt.Printf("Volume %d contains %d blocks\n", volumeNum, len(headers))
 }
 ```
 
