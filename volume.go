@@ -400,6 +400,16 @@ func (vm *volumeManager) Files() []string {
 	return vm.files
 }
 
+// GetVolumePath returns the full path to a volume file by volume number.
+func (vm *volumeManager) GetVolumePath(volnum int) string {
+	vm.mu.Lock()
+	defer vm.mu.Unlock()
+	if volnum < len(vm.files) {
+		return filepath.Join(vm.dir, vm.files[volnum])
+	}
+	return ""
+}
+
 func (vm *volumeManager) tryNewName(file string) (fs.File, error) {
 	// try using new naming scheme
 	name := nextNewVolName(file)
