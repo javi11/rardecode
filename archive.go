@@ -96,6 +96,8 @@ type fileBlockHeader struct {
 	decVer    int              // decoder to use for file
 	key       []byte           // key for AES, non-empty if file encrypted
 	iv        []byte           // iv for AES, non-empty if file encrypted
+	salt      []byte           // salt used for key derivation
+	kdfCount  int              // KDF iteration count (RAR5: 2^n, RAR3/4: 0x40000)
 	FileHeader
 }
 

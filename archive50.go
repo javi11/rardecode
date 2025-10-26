@@ -224,6 +224,10 @@ func (a *archive50) parseFileEncryptionRecord(b readBuf, f *fileBlockHeader) err
 	salt := slices.Clone(b.bytes(16))
 	f.iv = slices.Clone(b.bytes(16))
 
+	// Store salt and KDF count for metadata retrieval
+	f.salt = salt
+	f.kdfCount = 1 << uint(kdfCount) // Convert to actual iteration count (2^kdfCount)
+
 	var check []byte
 	if flags&file5EncCheckPresent > 0 {
 		if len(b) < 12 {

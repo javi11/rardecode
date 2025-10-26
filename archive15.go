@@ -315,6 +315,9 @@ func (a *archive15) parseFileHeader(h *blockHeader15) (*fileBlockHeader, error) 
 			return nil, ErrCorruptFileHeader
 		}
 		salt = slices.Clone(b.bytes(saltSize))
+		// Store salt and KDF count for metadata retrieval
+		f.salt = salt
+		f.kdfCount = hashRounds // RAR3/4 uses fixed 0x40000 iterations
 	}
 	if h.flags&fileExtTime > 0 {
 		readExtTimes(f, &b)
