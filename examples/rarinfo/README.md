@@ -19,7 +19,7 @@ go build -o rarinfo ./examples/rarinfo
 Or install directly:
 
 ```bash
-go install github.com/nwaples/rardecode/v2/cmd/rarinfo@latest
+go install github.com/javi11/rardecode/v2/cmd/rarinfo@latest
 ```
 
 ## Example Output

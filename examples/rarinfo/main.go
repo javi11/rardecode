@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nwaples/rardecode/v2"
+	"github.com/javi11/rardecode/v2"
 )
 
 func main() {
