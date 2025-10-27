@@ -80,13 +80,13 @@ func ListArchiveInfo(name string, opts ...Option) ([]ArchiveFileInfo, error) {
 				Encrypted:    encrypted,
 			}
 
-		// Add encryption parameters if available (password was provided and file is encrypted)
-		if encrypted && len(block.key) > 0 {
-			partInfo.Salt = block.salt
-			partInfo.AesKey = block.key
-			partInfo.AesIV = block.iv
-			partInfo.KdfIterations = block.kdfCount
-		}
+			// Add encryption parameters if available (password was provided and file is encrypted)
+			if encrypted && len(block.key) > 0 {
+				partInfo.Salt = block.salt
+				partInfo.AesKey = block.key
+				partInfo.AesIV = block.iv
+				partInfo.KdfIterations = block.kdfCount
+			}
 
 			fileInfo.Parts = append(fileInfo.Parts, partInfo)
 			fileInfo.TotalPackedSize += block.PackedSize
@@ -100,7 +100,10 @@ func ListArchiveInfo(name string, opts ...Option) ([]ArchiveFileInfo, error) {
 			}
 		}
 
-		result = append(result, fileInfo)
+		// ignore files with unknown size
+		if fileInfo.TotalUnpackedSize > 0 {
+			result = append(result, fileInfo)
+		}
 	}
 
 	return result, nil
