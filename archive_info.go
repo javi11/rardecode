@@ -4,10 +4,12 @@ package rardecode
 type FilePartInfo struct {
 	Path          string `json:"path"`                    // Full path to the volume file
 	DataOffset    int64  `json:"dataOffset"`              // Byte offset where the file data starts in the volume
-	PackedSize    int64  `json:"packedSize"`              // Size of packed data in this volume part
-	UnpackedSize  int64  `json:"unpackedSize"`            // Total unpacked size of the complete file
-	Stored        bool   `json:"stored"`                  // True if data is stored (not compressed)
-	Encrypted     bool   `json:"encrypted"`               // True if this part is encrypted
+	PackedSize        int64  `json:"packedSize"`              // Size of packed data in this volume part
+	UnpackedSize      int64  `json:"unpackedSize"`            // Total unpacked size of the complete file
+	Stored            bool   `json:"stored"`                  // True if data is stored (not compressed)
+	Compressed        bool   `json:"compressed"`              // True if data is compressed
+	CompressionMethod string `json:"compressionMethod"`       // Compression method used (stored, rar2.0, rar2.9, rar5.0, rar7.0)
+	Encrypted         bool   `json:"encrypted"`               // True if this part is encrypted
 	Salt          []byte `json:"salt,omitempty"`          // Salt for key derivation (only if encrypted and password provided)
 	AesKey        []byte `json:"aesKey,omitempty"`        // AES-256 key (32 bytes, only if encrypted and password provided)
 	AesIV         []byte `json:"aesIV,omitempty"`         // AES IV (16 bytes, only if encrypted and password provided)
@@ -22,6 +24,27 @@ type ArchiveFileInfo struct {
 	Parts             []FilePartInfo `json:"parts"`             // Information about each volume part
 	AnyEncrypted      bool           `json:"anyEncrypted"`      // True if any part is encrypted
 	AllStored         bool           `json:"allStored"`         // True if all parts are stored (not compressed)
+	Compressed        bool           `json:"compressed"`        // True if file is compressed
+	CompressionMethod string         `json:"compressionMethod"` // Compression method used (stored, rar2.0, rar2.9, rar5.0, rar7.0)
+}
+
+// compressionMethodName returns a human-readable name for the compression method
+// based on the decoder version.
+func compressionMethodName(decVer int) string {
+	switch decVer {
+	case 0:
+		return "stored"
+	case 1:
+		return "rar2.0"
+	case 2:
+		return "rar2.9"
+	case 3:
+		return "rar5.0"
+	case 4:
+		return "rar7.0"
+	default:
+		return "unknown"
+	}
 }
 
 // ListArchiveInfo returns detailed information about files in a RAR archive,
@@ -57,6 +80,8 @@ func ListArchiveInfo(name string, opts ...Option) ([]ArchiveFileInfo, error) {
 			TotalUnpackedSize: firstBlock.UnPackedSize,
 			Parts:             make([]FilePartInfo, 0, len(blockList)),
 			AllStored:         true,
+			Compressed:        firstBlock.decVer != 0,
+			CompressionMethod: compressionMethodName(firstBlock.decVer),
 		}
 
 		// Process each block (volume part)
@@ -66,18 +91,22 @@ func ListArchiveInfo(name string, opts ...Option) ([]ArchiveFileInfo, error) {
 
 			// Determine if this part is stored (not compressed)
 			stored := block.decVer == 0
+			compressed := block.decVer != 0
+			compressionMethod := compressionMethodName(block.decVer)
 
 			// Check encryption
 			encrypted := block.Encrypted
 
 			// Create part info
 			partInfo := FilePartInfo{
-				Path:         volumePath,
-				DataOffset:   block.dataOff,
-				PackedSize:   block.PackedSize,
-				UnpackedSize: block.UnPackedSize,
-				Stored:       stored,
-				Encrypted:    encrypted,
+				Path:              volumePath,
+				DataOffset:        block.dataOff,
+				PackedSize:        block.PackedSize,
+				UnpackedSize:      block.UnPackedSize,
+				Stored:            stored,
+				Compressed:        compressed,
+				CompressionMethod: compressionMethod,
+				Encrypted:         encrypted,
 			}
 
 			// Add encryption parameters if available (password was provided and file is encrypted)
