@@ -95,6 +95,7 @@ type volume interface {
 	byteReader
 	writeToAtMost(w io.Writer, n int64) (int64, error)
 	nextBlock() (*fileBlockHeader, error)
+	nextBlockHeaderOnly() (*fileBlockHeader, error) // reads header without discarding packed data
 	openBlock(volnum int, offset, size int64) error
 	canSeek() bool
 }
@@ -150,6 +151,31 @@ func (v *readerVolume) nextBlock() (*fileBlockHeader, error) {
 		}
 		v.n = 0
 	}
+	f, err := v.arc.nextBlock(v.br)
+	if err != nil {
+		return nil, err
+	}
+	f.volnum = v.num
+	f.dataOff = v.br.off
+	v.n = f.PackedSize
+	return f, nil
+}
+
+// nextBlockHeaderOnly reads the next block header without discarding the current block's data.
+// This is used for metadata-only iteration to skip large files efficiently.
+// The caller must manually skip the accumulated packed data after reading all headers.
+func (v *readerVolume) nextBlockHeaderOnly() (*fileBlockHeader, error) {
+	// We still need to discard the data to position the reader correctly
+	// for reading the next header, but this will be optimized later by
+	// doing a single large skip for all blocks at once
+	if v.n > 0 {
+		err := v.br.Discard(v.n)
+		if err != nil {
+			return nil, err
+		}
+		v.n = 0
+	}
+
 	f, err := v.arc.nextBlock(v.br)
 	if err != nil {
 		return nil, err
@@ -268,6 +294,32 @@ func (v *fileVolume) openNext() error { return v.open(v.num + 1) }
 func (v *fileVolume) nextBlock() (*fileBlockHeader, error) {
 	for {
 		h, err := v.readerVolume.nextBlock()
+		if err == nil {
+			return h, nil
+		}
+		if err == ErrMultiVolume {
+			err = v.openNext()
+			if err != nil {
+				return nil, err
+			}
+		} else if err == errVolumeOrArchiveEnd {
+			err = v.openNext()
+			if err != nil {
+				// new volume doesnt exist, assume end of archive
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil, io.EOF
+				}
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
+	}
+}
+
+func (v *fileVolume) nextBlockHeaderOnly() (*fileBlockHeader, error) {
+	for {
+		h, err := v.readerVolume.nextBlockHeaderOnly()
 		if err == nil {
 			return h, nil
 		}

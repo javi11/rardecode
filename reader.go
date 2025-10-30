@@ -200,12 +200,13 @@ func newFileBlockList(blocks ...*fileBlockHeader) *fileBlockList {
 
 // packedFileReader provides sequential access to packed files in a RAR archive.
 type packedFileReader struct {
-	v      volume
-	h      *fileBlockHeader // current file header
-	dr     *decodeReader
-	offset int64
-	blocks *fileBlockList
-	opt    *options
+	v          volume
+	h          *fileBlockHeader // current file header
+	dr         *decodeReader
+	offset     int64
+	blocks     *fileBlockList
+	opt        *options
+	peekedNext *fileBlockHeader // peeked next block for multi-part file handling
 }
 
 func (f *packedFileReader) init(blocks *fileBlockList) error {
@@ -264,13 +265,22 @@ func (f *packedFileReader) nextFile() (*fileBlockList, error) {
 	if err != io.EOF {
 		return nil, err
 	}
-	h, err := f.v.nextBlock() // get next file block
-	if err != nil {
-		if err == errVolumeOrArchiveEnd {
-			err = io.EOF
+
+	var h *fileBlockHeader
+	// Check if we have a peeked block from previous iteration
+	if f.peekedNext != nil {
+		h = f.peekedNext
+		f.peekedNext = nil
+	} else {
+		h, err = f.v.nextBlock() // get next file block
+		if err != nil {
+			if err == errVolumeOrArchiveEnd {
+				err = io.EOF
+			}
+			return nil, err
 		}
-		return nil, err
 	}
+
 	if !h.first {
 		return nil, ErrInvalidFileBlock
 	}
@@ -279,6 +289,33 @@ func (f *packedFileReader) nextFile() (*fileBlockList, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Read all continuation blocks for multi-part files
+	for !f.h.last {
+		nextH, err := f.v.nextBlock()
+		if err != nil {
+			if err == io.EOF || err == errVolumeOrArchiveEnd {
+				// Archive ended but file hasn't - this is an error
+				return nil, ErrUnexpectedArcEnd
+			}
+			return nil, err
+		}
+
+		// Check if this is a continuation of the current file
+		if nextH.first || nextH.Name != f.h.Name {
+			// This is a new file, save it for next iteration
+			f.peekedNext = nextH
+			break
+		}
+
+		// Add continuation block
+		nextH.packedOff = f.h.packedOff + f.h.PackedSize
+		nextH.blocknum = f.h.blocknum + 1
+		f.h = nextH
+		f.offset = nextH.dataOff
+		blocks.addBlock(nextH)
+	}
+
 	return blocks, nil
 }
 

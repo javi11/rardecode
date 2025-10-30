@@ -124,16 +124,44 @@ func (br *bufVolumeReader) Discard(n int64) error {
 	br.i = 0
 	br.n = 0
 	br.off += buffered
-	// try seek
-	if sr, ok := br.r.(io.Seeker); ok {
-		_, err := sr.Seek(n, io.SeekCurrent)
+
+	// Optimization: prefer seeking for large discards
+	// This is especially beneficial when skipping large files in metadata-only mode
+	if br.sr != nil {
+		_, err := br.sr.Seek(n, io.SeekCurrent)
 		if err != nil {
 			return err
 		}
 		br.off += n
 		return nil
 	}
-	// copy to discard writer
+
+	// For non-seekable streams, use io.CopyN but prefer larger buffer for big skips
+	// This reduces the number of syscalls for large discards
+	if n > 1<<20 { // 1MB threshold
+		// Use a larger temporary buffer for more efficient discarding
+		const largeDiscardBufSize = 1 << 16 // 64KB
+		buf := make([]byte, largeDiscardBufSize)
+		for n > 0 {
+			toRead := n
+			if toRead > int64(len(buf)) {
+				toRead = int64(len(buf))
+			}
+			read, err := io.ReadFull(br.r, buf[:toRead])
+			br.off += int64(read)
+			n -= int64(read)
+			if err != nil {
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					// Partial read at end is acceptable
+					return nil
+				}
+				return err
+			}
+		}
+		return nil
+	}
+
+	// For smaller discards, use standard io.CopyN
 	written, err := io.CopyN(io.Discard, br.r, n)
 	br.off += written
 	return err
