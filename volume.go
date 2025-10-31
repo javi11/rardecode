@@ -32,12 +32,14 @@ func (fs osFS) Open(name string) (fs.File, error) {
 }
 
 type options struct {
-	bsize       int     // size to be use for bufio.Reader
-	maxDictSize int64   // max dictionary size
-	fs          fs.FS   // filesystem to use to open files
-	pass        *string // password for encrypted volumes
-	skipCheck   bool
-	openCheck   bool
+	bsize                 int     // size to be use for bufio.Reader
+	maxDictSize           int64   // max dictionary size
+	fs                    fs.FS   // filesystem to use to open files
+	pass                  *string // password for encrypted volumes
+	skipCheck             bool
+	openCheck             bool
+	parallelRead          bool // enable parallel reading for multi-volume archives
+	maxConcurrentVolumes  int  // max concurrent volumes to process (default: 10)
 }
 
 // An Option is used for optional archive extraction settings.
@@ -71,6 +73,19 @@ func SkipCheck(o *options) { o.skipCheck = true }
 
 // OpenFSCheck flags the archive files to be checked on Open or List.
 func OpenFSCheck(o *options) { o.openCheck = true }
+
+// ParallelRead enables parallel reading of multi-volume archives for improved performance.
+// This option only applies to multi-volume archives; single-volume archives will use sequential reading.
+func ParallelRead(enable bool) Option {
+	return func(o *options) { o.parallelRead = enable }
+}
+
+// MaxConcurrentVolumes sets the maximum number of volumes to process concurrently when
+// ParallelRead is enabled. The default is 10. Higher values may improve performance on fast
+// storage but will use more memory and file handles.
+func MaxConcurrentVolumes(n int) Option {
+	return func(o *options) { o.maxConcurrentVolumes = n }
+}
 
 func getOptions(opts []Option) *options {
 	opt := &options{

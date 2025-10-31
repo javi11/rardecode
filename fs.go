@@ -278,6 +278,18 @@ func listFileBlocks(name string, opts []Option) (*volumeManager, []*fileBlockLis
 	if options.openCheck {
 		options.skipCheck = false
 	}
+
+	// Try parallel reading if enabled
+	if options.parallelRead {
+		// Attempt parallel reading - will gracefully fall back to sequential on error
+		vm, fileBlocks, err := listFileBlocksParallel(name, opts)
+		if err == nil {
+			return vm, fileBlocks, nil
+		}
+		// If parallel reading fails, continue with sequential fallback
+	}
+
+	// Sequential reading (original implementation)
 	v, err := openVolume(name, options)
 	if err != nil {
 		return nil, nil, err
