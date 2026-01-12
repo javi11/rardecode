@@ -412,7 +412,9 @@ func (a *archive50) parseFileHeader(h *blockHeader50) (*fileBlockHeader, error) 
 		var err error
 		switch e.ftype {
 		case 1: // encryption
-			err = a.parseFileEncryptionRecord(e.data, f)
+			if encErr := a.parseFileEncryptionRecord(e.data, f); encErr != nil {
+				f.errs = append(f.errs, encErr)
+			}
 		case 2:
 			// TODO: hash
 		case 3:
