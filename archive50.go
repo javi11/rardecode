@@ -499,8 +499,13 @@ func (a *archive50) readBlockHeader(r byteReader) (*blockHeader50, error) {
 	}
 	b := readBuf(sizeBuf)
 	crc := b.uint32()
-	// TODO: check size is valid
 	size := int(b.uvarint()) // header size
+	// Validate header size to prevent panics with malformed archives.
+	// The minimum valid size must allow buf[3:] to work, meaning:
+	// 3 + size - len(b) >= 3, which simplifies to: size >= len(b)
+	if size < len(b) {
+		return nil, ErrCorruptBlockHeader
+	}
 
 	buf := make([]byte, 3+size-len(b))
 	copy(buf, sizeBuf[4:])
