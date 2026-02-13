@@ -506,6 +506,12 @@ func (a *archive50) readBlockHeader(r byteReader) (*blockHeader50, error) {
 	if size < len(b) {
 		return nil, ErrCorruptBlockHeader
 	}
+	// Prevent excessive memory allocation from corrupt headers.
+	// RAR5 block headers should not exceed a reasonable size.
+	const maxHeaderSize = 1 << 20 // 1MB
+	if size > maxHeaderSize {
+		return nil, ErrCorruptBlockHeader
+	}
 
 	buf := make([]byte, 3+size-len(b))
 	copy(buf, sizeBuf[4:])
