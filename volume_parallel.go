@@ -3,6 +3,7 @@ package rardecode
 import (
 	ctx "context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"runtime"
@@ -108,6 +109,18 @@ func (pvr *parallelVolumeReader) readVolumeHeaders(c ctx.Context, volnum int) ([
 	return headers, nil
 }
 
+// safeReadVolumeHeaders wraps readVolumeHeaders with panic recovery.
+// This prevents malformed archive data from crashing the entire process
+// when read in a worker goroutine.
+func (pvr *parallelVolumeReader) safeReadVolumeHeaders(c ctx.Context, volnum int) (headers []*fileBlockHeader, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("rardecode: panic reading volume %d: %v", volnum, r)
+		}
+	}()
+	return pvr.readVolumeHeaders(c, volnum)
+}
+
 // worker processes volumes from the work channel
 func (pvr *parallelVolumeReader) worker(c ctx.Context, workCh <-chan int, resultCh chan<- volumeWorkerResult, wg *sync.WaitGroup) {
 	defer wg.Done()
@@ -121,7 +134,7 @@ func (pvr *parallelVolumeReader) worker(c ctx.Context, workCh <-chan int, result
 				return
 			}
 
-			headers, err := pvr.readVolumeHeaders(c, volnum)
+			headers, err := pvr.safeReadVolumeHeaders(c, volnum)
 			select {
 			case <-c.Done():
 				return

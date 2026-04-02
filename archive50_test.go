@@ -112,3 +112,58 @@ func TestReadBlockHeader_NonPanicOnLargeSize(t *testing.T) {
 
 	// The test passes as long as we didn't panic
 }
+
+// TestReadBlockHeader_ExcessiveSize verifies that a corrupt header claiming
+// an excessively large size is rejected rather than causing a huge allocation.
+func TestReadBlockHeader_ExcessiveSize(t *testing.T) {
+	// Craft a header where size passes the minimum check (size >= len(b))
+	// but exceeds the 1MB max header size guard.
+	// After CRC (4 bytes), 3 bytes remain. We encode a uvarint using all
+	// 3 bytes (consuming them all so len(b)=0, and size >= 0 passes).
+	// Encode size = 1_500_000 (> 1MB limit) as a 3-byte uvarint.
+	size := uint64(1_500_000)
+	buf := make([]byte, 7)
+	binary.LittleEndian.PutUint32(buf[0:4], 0x12345678)  // CRC (dummy)
+	buf[4] = byte(size&0x7F) | 0x80                       // first byte with continuation
+	buf[5] = byte((size>>7)&0x7F) | 0x80                  // second byte with continuation
+	buf[6] = byte(size >> 14)                              // third byte (final, < 0x80)
+
+	a := &archive50{}
+	r := &bufVolumeReader{
+		buf: make([]byte, defaultBufSize),
+	}
+	r.r = bytes.NewReader(buf)
+
+	_, err := a.readBlockHeader(r)
+	if err != ErrCorruptBlockHeader {
+		t.Errorf("readBlockHeader() error = %v, want %v", err, ErrCorruptBlockHeader)
+	}
+}
+
+// TestReadBlockHeader_ExactPanicScenario reproduces the exact panic from the
+// stack trace: uvarint consumes 1 byte leaving size=1 and len(b)=2, which
+// would cause buf[3:2] (slice bounds out of range) in the old code.
+func TestReadBlockHeader_ExactPanicScenario(t *testing.T) {
+	// Reproduce: CRC(4 bytes) + uvarint(1 byte, value=1) + 2 unused bytes
+	// After uint32(): b has 3 bytes
+	// After uvarint(): consumes 1 byte, size=1, len(b)=2
+	// Old code: buf = make([]byte, 3+1-2) = make([]byte, 2)
+	//           buf[3:] panics with [3:2]
+	// Fixed code: size(1) < len(b)(2) → ErrCorruptBlockHeader
+	buf := make([]byte, 7)
+	binary.LittleEndian.PutUint32(buf[0:4], 0) // CRC (zeroed)
+	buf[4] = 0x01                                // uvarint size=1
+	buf[5] = 0x00                                // padding
+	buf[6] = 0x00                                // padding
+
+	a := &archive50{}
+	r := &bufVolumeReader{
+		buf: make([]byte, defaultBufSize),
+	}
+	r.r = bytes.NewReader(buf)
+
+	_, err := a.readBlockHeader(r)
+	if err != ErrCorruptBlockHeader {
+		t.Fatalf("readBlockHeader() error = %v, want %v (old code would panic here)", err, ErrCorruptBlockHeader)
+	}
+}
