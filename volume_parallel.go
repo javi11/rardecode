@@ -51,7 +51,7 @@ func (pvr *parallelVolumeReader) discoverVolumeCount() int {
 	// Try to open volumes sequentially until one fails
 	count := 0
 	for {
-		if count >= 1000 { // safety limit
+		if count >= pvr.opt.maxVolumes { // safety limit
 			break
 		}
 		_, err := pvr.vm.openVolumeFile(count)

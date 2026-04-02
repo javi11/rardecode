@@ -40,6 +40,7 @@ type options struct {
 	openCheck             bool
 	parallelRead          bool // enable parallel reading for multi-volume archives
 	maxConcurrentVolumes  int  // max concurrent volumes to process (default: 10)
+	maxVolumes            int  // max number of volumes to discover (default: 10000)
 }
 
 // An Option is used for optional archive extraction settings.
@@ -87,10 +88,18 @@ func MaxConcurrentVolumes(n int) Option {
 	return func(o *options) { o.maxConcurrentVolumes = n }
 }
 
+// MaxVolumes sets the maximum number of volumes that will be discovered when reading a
+// multi-volume archive. The default is 10000. Increase this value if your archive has
+// more parts than the default allows.
+func MaxVolumes(n int) Option {
+	return func(o *options) { o.maxVolumes = n }
+}
+
 func getOptions(opts []Option) *options {
 	opt := &options{
 		fs:          defaultFS,
 		maxDictSize: DefaultMaxDictionarySize,
+		maxVolumes:  10000,
 	}
 	for _, f := range opts {
 		f(opt)
