@@ -26,6 +26,7 @@ var (
 type bufVolumeReader struct {
 	r   io.Reader
 	sr  io.Seeker
+	ra  io.ReaderAt // non-nil when r implements io.ReaderAt (e.g. *os.File)
 	buf []byte
 	i   int
 	n   int
@@ -45,6 +46,20 @@ func (br *bufVolumeReader) fill() error {
 		return br.readErr()
 	}
 	br.i = 0
+	if br.ra != nil {
+		// Use ReadAt for precise positioning — reads exactly at br.off without
+		// touching the OS file position or requiring a prior Seek.
+		n, err := br.ra.ReadAt(br.buf, br.off)
+		br.n = n
+		if n > 0 {
+			return nil
+		}
+		if err == io.EOF {
+			return io.EOF
+		}
+		return err
+	}
+	// Streaming fallback (non-ReaderAt sources: pipes, network, bytes.Reader etc.)
 	for i := 0; i < maxEmptyReads; i++ {
 		br.n, br.err = br.r.Read(br.buf)
 		if br.n > 0 {
@@ -61,10 +76,17 @@ func (br *bufVolumeReader) fill() error {
 }
 
 func (br *bufVolumeReader) canSeek() bool {
-	return br.sr != nil
+	return br.sr != nil || br.ra != nil
 }
 
 func (br *bufVolumeReader) seek(offset int64) error {
+	// When ReaderAt is available, seeking is free — just update the logical offset.
+	if br.ra != nil {
+		br.i = 0
+		br.n = 0
+		br.off = offset
+		return nil
+	}
 	if br.sr == nil {
 		return fs.ErrInvalid
 	}
@@ -125,6 +147,13 @@ func (br *bufVolumeReader) Discard(n int64) error {
 	br.n = 0
 	br.off += buffered
 
+	// Fast path: when io.ReaderAt is available, skipping data costs zero syscalls —
+	// just advance the logical offset. Next fill() will ReadAt at the new position.
+	if br.ra != nil {
+		br.off += n
+		return nil
+	}
+
 	// Optimization: prefer seeking for large discards
 	// This is especially beneficial when skipping large files in metadata-only mode
 	if br.sr != nil {
@@ -143,10 +172,7 @@ func (br *bufVolumeReader) Discard(n int64) error {
 		const largeDiscardBufSize = 1 << 16 // 64KB
 		buf := make([]byte, largeDiscardBufSize)
 		for n > 0 {
-			toRead := n
-			if toRead > int64(len(buf)) {
-				toRead = int64(len(buf))
-			}
+			toRead := min(n, int64(len(buf)))
 			read, err := io.ReadFull(br.r, buf[:toRead])
 			br.off += int64(read)
 			n -= int64(read)
@@ -258,9 +284,31 @@ func (br *bufVolumeReader) findSig() (int, error) {
 func (br *bufVolumeReader) Reset(r io.Reader) error {
 	br.r = r
 	br.sr, _ = r.(io.Seeker)
+	br.ra, _ = r.(io.ReaderAt)
 	br.i = 0
 	br.n = 0
 	br.off = 0
+
+	// Fast path: when io.ReaderAt is available, try reading signature at offset 0 directly.
+	// This avoids the up-to-1MB linear scan done by findSig() for standard archives.
+	if br.ra != nil {
+		var sigBuf [sigPrefixLen + 2]byte
+		n, _ := br.ra.ReadAt(sigBuf[:], 0)
+		if n >= sigPrefixLen+1 && bytes.HasPrefix(sigBuf[:n], []byte(sigPrefix)) {
+			ver := int(sigBuf[sigPrefixLen])
+			if ver == 0 {
+				br.off = int64(sigPrefixLen + 1)
+				br.ver = ver
+				return nil
+			} else if n >= sigPrefixLen+2 && sigBuf[sigPrefixLen+1] == 0 {
+				br.off = int64(sigPrefixLen + 2)
+				br.ver = ver
+				return nil
+			}
+		}
+		// Fall through to streaming findSig if fast path fails (SFX archives, etc.)
+	}
+
 	ver, err := br.findSig()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
