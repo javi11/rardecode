@@ -3,9 +3,9 @@ package rardecode
 import "io"
 
 // listArchiveInfoBufSize is the buffer size used for metadata-only reads.
-// Larger than the default (4KB) to batch more headers per read syscall,
-// especially effective for archives containing many small files.
-const listArchiveInfoBufSize = 64 * 1024
+// Sized at 4KB — large enough for any RAR header (typically <500 bytes)
+// while avoiding the 64KB waste that occurred when seeking between headers.
+const listArchiveInfoBufSize = 4 * 1024
 
 // FilePartInfo represents a single volume part of a file in a RAR archive.
 type FilePartInfo struct {
@@ -63,11 +63,12 @@ func compressionMethodName(decVer int) string {
 // Note: This works best with stored (uncompressed) files. For compressed or
 // encrypted files, the metadata will be provided but validation may not be possible.
 //
-// For multi-volume archives, consider using ListArchiveInfoParallel for better performance.
+// Parallel processing is used by default for multi-volume archives. Use
+// MaxConcurrentVolumes(n) to limit concurrency if needed.
 func ListArchiveInfo(name string, opts ...Option) ([]ArchiveFileInfo, error) {
-	// Prepend a larger buffer for metadata-only reads. If the caller explicitly
-	// passes BufferSize(), it will be applied after this and take precedence.
-	opts = append([]Option{BufferSize(listArchiveInfoBufSize)}, opts...)
+	// Prepend parallel read and a small buffer for metadata-only reads. If the caller
+	// explicitly passes these options, they will be applied after and take precedence.
+	opts = append([]Option{ParallelRead(true), BufferSize(listArchiveInfoBufSize)}, opts...)
 	vm, fileBlocks, err := listFileBlocks(name, opts)
 	if err != nil {
 		return nil, err
