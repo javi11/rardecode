@@ -79,7 +79,27 @@ func (br *bufVolumeReader) canSeek() bool {
 	return br.sr != nil || br.ra != nil
 }
 
+// seekInBuffer moves the read position to offset if it lies within the
+// currently buffered window, avoiding a refetch. Returns false otherwise.
+// offset == end (one past the last buffered byte) is deliberately in range:
+// it leaves the buffer empty and the next fill() reads at that position,
+// which is correct for both ReaderAt sources (fill reads at br.off) and
+// Seeker/stream sources (the stream already sits at end after the last fill).
+func (br *bufVolumeReader) seekInBuffer(offset int64) bool {
+	start := br.off - int64(br.i)
+	end := start + int64(br.n)
+	if offset < start || offset > end {
+		return false
+	}
+	br.i = int(offset - start)
+	br.off = offset
+	return true
+}
+
 func (br *bufVolumeReader) seek(offset int64) error {
+	if br.seekInBuffer(offset) {
+		return nil
+	}
 	// When ReaderAt is available, seeking is free — just update the logical offset.
 	if br.ra != nil {
 		br.i = 0
@@ -89,14 +109,6 @@ func (br *bufVolumeReader) seek(offset int64) error {
 	}
 	if br.sr == nil {
 		return fs.ErrInvalid
-	}
-	start := br.off - int64(br.i)
-	end := start + int64(br.n)
-	if offset >= start && offset <= end {
-		diff := offset - br.off
-		br.off += diff
-		br.i += int(diff)
-		return nil
 	}
 	_, err := br.sr.Seek(offset, io.SeekStart)
 	if err != nil {
@@ -249,7 +261,20 @@ func (br *bufVolumeReader) findSig() (int, error) {
 		if buffered < sigPrefixLen+2 {
 			br.n = copy(br.buf, br.buf[br.i:br.n])
 			br.i = 0
-			l, err := io.ReadAtLeast(br.r, br.buf[br.n:], sigPrefixLen+2-buffered)
+			var l int
+			var err error
+			if br.ra != nil {
+				// The underlying stream position is never advanced when reading
+				// via ReadAt, so refill at the logical offset of the buffer end.
+				l, err = br.ra.ReadAt(br.buf[br.n:], br.off+int64(br.n))
+				if l >= sigPrefixLen+2-buffered {
+					err = nil
+				} else if err == io.EOF {
+					err = io.ErrUnexpectedEOF
+				}
+			} else {
+				l, err = io.ReadAtLeast(br.r, br.buf[br.n:], sigPrefixLen+2-buffered)
+			}
 			br.n += l
 			if err != nil {
 				if errors.Is(err, io.ErrUnexpectedEOF) {
@@ -288,25 +313,30 @@ func (br *bufVolumeReader) Reset(r io.Reader) error {
 	br.i = 0
 	br.n = 0
 	br.off = 0
+	br.err = nil
 
-	// Fast path: when io.ReaderAt is available, try reading signature at offset 0 directly.
-	// This avoids the up-to-1MB linear scan done by findSig() for standard archives.
+	// Fast path: when io.ReaderAt is available, fill the whole buffer at offset 0
+	// and parse the signature from it. This avoids the up-to-1MB linear scan done
+	// by findSig() for standard archives, and leaves the remaining bytes buffered
+	// so the archive header reads that follow need no additional ReadAt calls.
 	if br.ra != nil {
-		var sigBuf [sigPrefixLen + 2]byte
-		n, _ := br.ra.ReadAt(sigBuf[:], 0)
-		if n >= sigPrefixLen+1 && bytes.HasPrefix(sigBuf[:n], []byte(sigPrefix)) {
-			ver := int(sigBuf[sigPrefixLen])
+		err := br.fill()
+		if err == nil && br.n >= sigPrefixLen+1 && bytes.HasPrefix(br.buf[:br.n], []byte(sigPrefix)) {
+			ver := int(br.buf[sigPrefixLen])
 			if ver == 0 {
-				br.off = int64(sigPrefixLen + 1)
+				br.i = sigPrefixLen + 1
+				br.off = int64(br.i)
 				br.ver = ver
 				return nil
-			} else if n >= sigPrefixLen+2 && sigBuf[sigPrefixLen+1] == 0 {
-				br.off = int64(sigPrefixLen + 2)
+			} else if br.n >= sigPrefixLen+2 && br.buf[sigPrefixLen+1] == 0 {
+				br.i = sigPrefixLen + 2
+				br.off = int64(br.i)
 				br.ver = ver
 				return nil
 			}
 		}
-		// Fall through to streaming findSig if fast path fails (SFX archives, etc.)
+		// Fall through to streaming findSig if fast path fails (SFX archives, etc.).
+		// The already-buffered bytes are kept so findSig rescans them in place.
 	}
 
 	ver, err := br.findSig()
