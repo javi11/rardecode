@@ -46,15 +46,17 @@ func newParallelVolumeReader(vm *volumeManager, opt *options) *parallelVolumeRea
 }
 
 // discoverVolumeCount attempts to determine how many volumes exist
-// Returns the count or -1 if cannot be determined
+// Returns the count or -1 if cannot be determined.
+// Volume 0 is assumed to exist: callers only reach this after openVolume
+// succeeded on the first volume.
 func (pvr *parallelVolumeReader) discoverVolumeCount() int {
 	// Try to open volumes sequentially until one fails
-	count := 0
+	count := 1
 	for {
 		if count >= pvr.opt.maxVolumes { // safety limit
 			break
 		}
-		_, err := pvr.vm.openVolumeFile(count)
+		f, err := pvr.vm.openVolumeFile(count)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				break
@@ -62,6 +64,7 @@ func (pvr *parallelVolumeReader) discoverVolumeCount() int {
 			// Other errors - cannot determine count reliably
 			return -1
 		}
+		f.Close()
 		count++
 	}
 	return count
@@ -76,6 +79,13 @@ func (pvr *parallelVolumeReader) readVolumeHeaders(c ctx.Context, volnum int) ([
 	}
 	defer v.Close()
 
+	return collectHeaders(c, v.readerVolume)
+}
+
+// collectHeaders reads all block headers from a single already-open volume.
+// It must operate on a readerVolume (not a fileVolume) so that reaching the
+// end of the volume does not auto-advance into the next volume file.
+func collectHeaders(c ctx.Context, v *readerVolume) ([]*fileBlockHeader, error) {
 	headers := []*fileBlockHeader{}
 
 	// Read all headers from this volume
@@ -86,9 +96,9 @@ func (pvr *parallelVolumeReader) readVolumeHeaders(c ctx.Context, volnum int) ([
 		default:
 		}
 
-		h, err := v.readerVolume.nextBlockHeaderOnly()
+		h, err := v.nextBlockHeaderOnly()
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err == errVolumeOrArchiveEnd {
@@ -144,8 +154,11 @@ func (pvr *parallelVolumeReader) worker(c ctx.Context, workCh <-chan int, result
 	}
 }
 
-// readAllVolumesParallel reads headers from all volumes in parallel
-func (pvr *parallelVolumeReader) readAllVolumesParallel() error {
+// readAllVolumesParallel reads headers from all volumes in parallel.
+// v0 is the already-open first volume; its headers are read directly on the
+// calling goroutine so the volume is not opened (and its archive headers not
+// re-read) a second time by a worker.
+func (pvr *parallelVolumeReader) readAllVolumesParallel(v0 *fileVolume) error {
 	// First, discover how many volumes we have
 	volumeCount := pvr.discoverVolumeCount()
 	if volumeCount <= 0 {
@@ -153,13 +166,19 @@ func (pvr *parallelVolumeReader) readAllVolumesParallel() error {
 	}
 	pvr.volumeCount = volumeCount
 
-	// If only one volume, fall back to sequential
+	// Read volume 0 from the already-open reader, which is positioned just past
+	// the main archive header. Use the embedded readerVolume so reaching the end
+	// of the volume does not auto-advance into the next volume file.
+	headers, err := collectHeaders(ctx.Background(), v0.readerVolume)
+	if err != nil {
+		return err
+	}
+	// No lock needed: written before any worker goroutine starts, and only
+	// read after all workers have finished (result loop / assembleFileBlocks).
+	pvr.headersByVolume[0] = headers
+
+	// If only one volume, we are done
 	if volumeCount == 1 {
-		headers, err := pvr.readVolumeHeaders(ctx.Background(), 0)
-		if err != nil {
-			return err
-		}
-		pvr.headersByVolume[0] = headers
 		return nil
 	}
 
@@ -168,17 +187,17 @@ func (pvr *parallelVolumeReader) readAllVolumesParallel() error {
 	defer cancel()
 
 	// Create channels
-	workCh := make(chan int, volumeCount)
-	resultCh := make(chan volumeWorkerResult, volumeCount)
+	workCh := make(chan int, volumeCount-1)
+	resultCh := make(chan volumeWorkerResult, volumeCount-1)
 
-	// Queue all volume numbers
-	for i := 0; i < volumeCount; i++ {
+	// Queue the remaining volume numbers (volume 0 was read above)
+	for i := 1; i < volumeCount; i++ {
 		workCh <- i
 	}
 	close(workCh)
 
 	// Start workers (limited by maxConcurrent)
-	numWorkers := min(pvr.maxConcurrent, volumeCount)
+	numWorkers := min(pvr.maxConcurrent, volumeCount-1)
 	var wg sync.WaitGroup
 	wg.Add(numWorkers)
 
@@ -291,8 +310,8 @@ func listFileBlocksParallel(name string, opts []Option) (*volumeManager, []*file
 	// Create parallel reader
 	pvr := newParallelVolumeReader(v.vm, options)
 
-	// Read all volumes in parallel
-	err = pvr.readAllVolumesParallel()
+	// Read all volumes in parallel, reusing the already-open first volume
+	err = pvr.readAllVolumesParallel(v)
 	if err != nil {
 		return nil, nil, err
 	}
