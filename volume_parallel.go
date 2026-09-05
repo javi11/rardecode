@@ -79,13 +79,16 @@ func (pvr *parallelVolumeReader) readVolumeHeaders(c ctx.Context, volnum int) ([
 	}
 	defer v.Close()
 
-	return collectHeaders(c, v.readerVolume)
+	return collectHeaders(c, v.readerVolume, pvr.opt.tolerateTailErr)
 }
 
 // collectHeaders reads all block headers from a single already-open volume.
 // It must operate on a readerVolume (not a fileVolume) so that reaching the
 // end of the volume does not auto-advance into the next volume file.
-func collectHeaders(c ctx.Context, v *readerVolume) ([]*fileBlockHeader, error) {
+// tolerateTailErr, when non-nil, may accept a read error raised after at least
+// one header was collected as the end of the volume (see
+// TolerateVolumeTailError).
+func collectHeaders(c ctx.Context, v *readerVolume, tolerateTailErr func(error) bool) ([]*fileBlockHeader, error) {
 	headers := []*fileBlockHeader{}
 
 	// Read all headers from this volume
@@ -108,6 +111,11 @@ func collectHeaders(c ctx.Context, v *readerVolume) ([]*fileBlockHeader, error) 
 			if err == ErrMultiVolume {
 				// File continues in next volume - this is expected
 				// We still want to return the headers we've collected so far
+				break
+			}
+			if len(headers) > 0 && tolerateTailErr != nil && tolerateTailErr(err) {
+				// The volume's file headers are in hand; only its tail (the
+				// end-of-archive block) could not be read.
 				break
 			}
 			return nil, err
@@ -169,7 +177,7 @@ func (pvr *parallelVolumeReader) readAllVolumesParallel(v0 *fileVolume) error {
 	// Read volume 0 from the already-open reader, which is positioned just past
 	// the main archive header. Use the embedded readerVolume so reaching the end
 	// of the volume does not auto-advance into the next volume file.
-	headers, err := collectHeaders(ctx.Background(), v0.readerVolume)
+	headers, err := collectHeaders(ctx.Background(), v0.readerVolume, pvr.opt.tolerateTailErr)
 	if err != nil {
 		return err
 	}

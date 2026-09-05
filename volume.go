@@ -32,15 +32,20 @@ func (fs osFS) Open(name string) (fs.File, error) {
 }
 
 type options struct {
-	bsize                 int     // size to be use for bufio.Reader
-	maxDictSize           int64   // max dictionary size
-	fs                    fs.FS   // filesystem to use to open files
-	pass                  *string // password for encrypted volumes
-	skipCheck             bool
-	openCheck             bool
-	parallelRead          bool // enable parallel reading for multi-volume archives
-	maxConcurrentVolumes  int  // max concurrent volumes to process (default: 10)
-	maxVolumes            int  // max number of volumes to discover (default: 10000)
+	bsize                int     // size to be use for bufio.Reader
+	maxDictSize          int64   // max dictionary size
+	fs                   fs.FS   // filesystem to use to open files
+	pass                 *string // password for encrypted volumes
+	skipCheck            bool
+	openCheck            bool
+	parallelRead         bool // enable parallel reading for multi-volume archives
+	maxConcurrentVolumes int  // max concurrent volumes to process (default: 10)
+	maxVolumes           int  // max number of volumes to discover (default: 10000)
+	// tolerateTailErr, when set, lets a metadata-only volume scan treat a read
+	// error raised after the volume's file headers were already collected as
+	// the end of that volume. Storage that cannot deliver a volume's tail
+	// (its end-of-archive block) still yields the file layout it describes.
+	tolerateTailErr func(error) bool
 }
 
 // An Option is used for optional archive extraction settings.
@@ -86,6 +91,17 @@ func ParallelRead(enable bool) Option {
 // storage but will use more memory and file handles.
 func MaxConcurrentVolumes(n int) Option {
 	return func(o *options) { o.maxConcurrentVolumes = n }
+}
+
+// TolerateVolumeTailError makes header-only scanning (ListArchiveInfo and the
+// iterator over a multi-volume archive) accept a read error for which fn
+// returns true once at least one file header has been read from the current
+// volume, treating the volume as ended there. The file blocks collected so far
+// are kept. Use it with storage-backed filesystems that may be unable to read
+// the trailing bytes of a volume (which hold only the end-of-archive block)
+// while its headers are intact.
+func TolerateVolumeTailError(fn func(error) bool) Option {
+	return func(o *options) { o.tolerateTailErr = fn }
 }
 
 // MaxVolumes sets the maximum number of volumes that will be discovered when reading a
