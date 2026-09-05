@@ -13,9 +13,13 @@ import (
 var errTailGone = errors.New("tail article missing")
 
 // tailBrokenFS serves testdata volumes but refuses to read the trailing
-// bytes of every volume after the first, the way a Usenet-backed filesystem
-// behaves when a volume's last article is gone from the provider.
-type tailBrokenFS struct{ tailBytes int64 }
+// bytes of the volumes named in broken (every volume after the first when
+// nil), the way a Usenet-backed filesystem behaves when a volume's last
+// article is gone from the provider.
+type tailBrokenFS struct {
+	tailBytes int64
+	broken    map[string]bool
+}
 
 type tailBrokenFile struct {
 	*os.File
@@ -28,7 +32,10 @@ func (t tailBrokenFS) Open(name string) (fs.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.HasSuffix(name, "part1.rar") {
+	if t.broken == nil && strings.HasSuffix(name, "part1.rar") {
+		return f, nil
+	}
+	if t.broken != nil && !t.broken[name] {
 		return f, nil
 	}
 	st, err := f.Stat()
@@ -64,6 +71,9 @@ func TestListArchiveInfoTolerateVolumeTailError(t *testing.T) {
 		t.Fatalf("clean ListArchiveInfo: %v", err)
 	}
 
+	// The last volume ends with a completed file, so its tail must be read
+	// (another file could follow); an unreadable tail there is fatal unless
+	// tolerated.
 	broken := tailBrokenFS{tailBytes: 8}
 
 	if _, err := ListArchiveInfo(name, FileSystem(broken)); err == nil {
@@ -83,5 +93,30 @@ func TestListArchiveInfoTolerateVolumeTailError(t *testing.T) {
 	if _, err := ListArchiveInfo(name, FileSystem(broken),
 		TolerateVolumeTailError(func(error) bool { return false })); err == nil {
 		t.Fatal("expected the error to propagate when the predicate rejects it")
+	}
+}
+
+// A volume whose last file block continues into the next volume is finished
+// as soon as that header is read: its trailing service and end blocks are
+// never fetched, so an unreadable tail there is not even noticed. The fixture's
+// part2 ends mid-file2; part3 ends with file2 complete and must still be read.
+func TestListArchiveInfoSkipsTailOfContinuedVolumes(t *testing.T) {
+	name := "testdata/multi.part1.rar"
+	want, err := ListArchiveInfo(name)
+	if err != nil {
+		t.Fatalf("clean ListArchiveInfo: %v", err)
+	}
+	continued := tailBrokenFS{tailBytes: 4096, broken: map[string]bool{"testdata/multi.part1.rar": true, "testdata/multi.part2.rar": true}}
+	got, err := ListArchiveInfo(name, FileSystem(continued))
+	if err != nil {
+		t.Fatalf("ListArchiveInfo with unreadable tails on continued volumes: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("file layout differs:\n got %+v\nwant %+v", got, want)
+	}
+
+	final := tailBrokenFS{tailBytes: 8, broken: map[string]bool{"testdata/multi.part3.rar": true}}
+	if _, err := ListArchiveInfo(name, FileSystem(final)); err == nil {
+		t.Fatal("expected an error: the last volume's tail may hold another file header and must be read")
 	}
 }

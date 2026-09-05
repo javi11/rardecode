@@ -145,13 +145,15 @@ func TestListArchiveInfoReadCounts(t *testing.T) {
 	// One ReadAt per header cluster is optimal: the signature, archive header
 	// and first file header all fit in a single buffer fill at the start of
 	// each volume, and one more fill is needed per header region that follows
-	// packed data. For this fixture (file1 spans part1-2, file2 spans part2-3):
-	//   part1: start headers + end block                      = 2
-	//   part2: start headers + file2 header mid-volume + end  = 3
-	//   part3: start headers + end block                      = 2
+	// packed data. A volume whose last file continues into the next one is
+	// finished at that header, so its end block is never read. For this
+	// fixture (file1 spans part1-2, file2 spans part2-3):
+	//   part1: start headers (file1 continues)                     = 1
+	//   part2: start headers + file2 header mid-volume (continues)  = 2
+	//   part3: start headers + end block (file2 completes)          = 2
 	want := map[string]int{
-		"testdata/multi.part1.rar": 2,
-		"testdata/multi.part2.rar": 3,
+		"testdata/multi.part1.rar": 1,
+		"testdata/multi.part2.rar": 2,
 		"testdata/multi.part3.rar": 2,
 	}
 	for path, n := range want {

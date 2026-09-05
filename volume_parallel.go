@@ -122,6 +122,16 @@ func collectHeaders(c ctx.Context, v *readerVolume, tolerateTailErr func(error) 
 		}
 
 		headers = append(headers, h)
+
+		// A file block whose data continues in the next volume is, by the
+		// format's rules, the last file block of this volume: only service
+		// blocks (quick-open data, recovery record) and the end-of-archive
+		// block can follow. Skipping them saves a read at the far end of the
+		// volume — on storage where a read is a whole article fetch, one
+		// fetch per volume, and one fewer article that must still exist.
+		if !h.last {
+			break
+		}
 	}
 
 	return headers, nil
